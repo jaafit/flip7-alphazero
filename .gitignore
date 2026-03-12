@@ -1,1 +1,9 @@
 flip7
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.so
+.env
+.venv
+venv/

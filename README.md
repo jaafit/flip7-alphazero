@@ -41,31 +41,28 @@ Be the first player to score **200 or more points** by collecting cards across m
 ## 🚀 Installation & Setup
 
 ### Prerequisites
-- Go 1.19 or higher
+- Python 3.10 or higher (no external dependencies)
 
-### Build and Run
+### Run the game
 ```bash
 # Clone or download the project
 git clone <repository-url>
-cd flip7
-
-# Build the game
-go build .
+cd flip7-alphazero
 
 # Run the game
-./flip7
+python3 main.py
 
 # Run with debug mode (choose cards manually)
-./flip7 -debug
+python3 main.py --debug
 ```
 
 ### Quick Start
 ```bash
 # Normal game
-go run .
+python3 main.py
 
 # Debug mode
-go run . -debug
+python3 main.py --debug
 ```
 
 ### Game Modes
@@ -79,7 +76,7 @@ go run . -debug
 🎴 Welcome to Flip 7!
 Press your luck and flip your way to 200 points!
 
-How many players? (3-8): 3
+How many players total? (2-18): 3
 Enter name for Player 1: Alice
 Enter name for Player 2: Bob  
 Enter name for Player 3: Charlie
@@ -133,14 +130,16 @@ Alice: 10 points this round (Total: 10)
 ## 🏗️ Project Structure
 
 ```
-flip7/
-├── main.go          # Entry point
-├── game.go          # Main game logic and flow
-├── card.go          # Card types and definitions
-├── deck.go          # Deck management and shuffling
-├── player.go        # Player state and hand management
-├── go.mod           # Go module file
-└── README.md        # This file
+flip7-alphazero/
+├── main.py           # Entry point
+├── game.py           # Main game logic and flow
+├── card.py           # Card types and definitions
+├── deck.py           # Deck management and shuffling
+├── player.py         # Player state and hand management
+├── human_player.py   # Human player (stdin I/O)
+├── computer_player.py # Computer players and AI strategies
+├── requirements.txt  # Dependencies (stdlib only)
+└── README.md         # This file
 ```
 
 ## 🛠️ Development
@@ -238,7 +237,7 @@ This is an implementation of the card game **Flip 7** designed by Eric Olsen and
 ## 🎉 Credits
 
 - **Original Game**: Flip 7 by Eric Olsen (The Op Games, 2024)
-- **CLI Implementation**: Built with Go
+- **CLI Implementation**: Built with Python
 - **Inspiration**: Love for press-your-luck games and terminal interfaces
 
 ---
