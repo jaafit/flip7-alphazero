@@ -69,7 +69,7 @@ def _deck_block(deck: Deck) -> np.ndarray:
     
     number_sum = sum(c.value for c in draw_cards if c.type == CardType.NUMBER)
     plus_mod_sum = sum(c.get_points() for c in draw_cards if c.type == CardType.MODIFIER) # x2 get_points() is 0
-    excpected_draw_value = (number_sum + plus_mod_sum) / n
+    excpected_draw_value = (number_sum + plus_mod_sum) / n / 12.0
     
     out[0] = sum(1 for c in draw_cards if c.type == CardType.MODIFIER and c.modifier == ModifierType.MULTIPLY_2) / n 
     out[1] = sum(1 for c in draw_cards if c.type == CardType.ACTION and c.action == ActionType.FLIP_THREE) / n
@@ -147,17 +147,16 @@ class Flip7Env:
         """True if a game is running and agent player is set (safe to call encode_state)."""
         return self._game is not None and self._agent_player is not None
 
-    def encode_state(self) -> np.ndarray:
+    def encode_state(self, player_index:int) -> np.ndarray:
         """Build OBS_DIM float32 array from current game state (agent perspective)."""
         if self._game is None or self._agent_player is None:
             return np.zeros(OBS_DIM, dtype=np.float32)
         game = self._game
         players = game._players
         n = len(players)
-        # Agent is at agent_player_idx; order: agent first, then +1, +2, +3 mod n
         ordered: List[BasePlayer] = []
         for i in range(n):
-            idx = (self.agent_player_idx + i) % n
+            idx = (player_index + i) % n
             ordered.append(players[idx])
         blocks = []
         for p in ordered:
@@ -260,7 +259,7 @@ class Flip7Env:
         self._current_legal_mask = legal_mask if legal_mask is not None else np.ones(2, dtype=bool)
         info = {"active_head": self._current_active_head, "legal_mask": self._current_legal_mask}
         if done:
-            return self.encode_state(), info
+            return self.encode_state(self.agent_player_idx), info
         return obs, info
 
     def step(
@@ -272,5 +271,5 @@ class Flip7Env:
         self._current_active_head = active_head
         self._current_legal_mask = legal_mask
         if done:
-            return self.encode_state(), reward, True, {"active_head": active_head, "legal_mask": legal_mask}
+            return self.encode_state(self.agent_player_idx), reward, True, {"active_head": active_head, "legal_mask": legal_mask}
         return obs, 0.0, False, {"active_head": active_head, "legal_mask": legal_mask}
