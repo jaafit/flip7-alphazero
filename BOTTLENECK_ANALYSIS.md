@@ -36,7 +36,8 @@ So “what they all share” is:
 - **Why it hurts:** Episode length varies. When you have 12 envs, the batch finishes when the **slowest** of the 12 episodes finishes. Other workers may sit idle after finishing their episode, and main does nothing until all 12 results are in.
 - **Possible fixes:**  
   - **Async / streaming:** Let main consume results as they arrive and either update more often (e.g. with smaller batches) or keep a rolling buffer. This changes the algorithm (e.g. toward async PPO) and needs care.  
-  - **Multiple envs per worker:** Each worker runs several envs (e.g. 2–4) and returns multiple trajectories per batch. You then have fewer workers, so fewer weight broadcasts and less barrier penalty, while keeping total env count high.  
+  - **Multiple episodes per worker (implemented):** Each worker runs `--episodes-per-worker` episodes per weight load and returns that many trajectories; fewer barrier syncs per episode. Try e.g. `--envs 12 --episodes-per-worker 2` or `3`.  
+  - **Multiple envs per worker:** Alternatively, fewer worker processes each running several envs (same idea). You then have fewer workers, so fewer weight broadcasts and less barrier penalty, while keeping total env count high.  
   - **Non-blocking batch:** Start the next batch of weight sends as soon as **some** (e.g. N − 1) results are in and reuse the last worker’s slot; this requires a more involved protocol.
 
 ### 3. Result transfer: 12 large trajectory payloads

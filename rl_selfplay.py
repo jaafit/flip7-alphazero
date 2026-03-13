@@ -66,8 +66,9 @@ def _worker_loop(
     weights_queue: mp.Queue,
     result_queue: mp.Queue,
     device: str,
+    episodes_per_worker: int,
 ) -> None:
-    """Worker process: create nets and env once; each message loads state_dict and runs one episode."""
+    """Worker process: create nets and env once; each message loads state_dict and runs episodes_per_worker episodes."""
     from rl_network import Flip7Network
 
     agent_net = Flip7Network().to(device)
@@ -101,17 +102,21 @@ def _worker_loop(
             frozen_net.load_state_dict(frozen_sd)
             agent_net.to(device)
             frozen_net.to(device)
-            episode_reward, data = _worker_episode(agent_net, frozen_net, env)
-            result_queue.put((worker_id, episode_reward, data))
+            batch_pairs: List[Tuple[float, List[tuple]]] = []
+            for _ in range(episodes_per_worker):
+                episode_reward, data = _worker_episode(agent_net, frozen_net, env)
+                batch_pairs.append((episode_reward, data))
+            result_queue.put((worker_id, batch_pairs))
         except Exception:
             traceback.print_exc()
-            result_queue.put((worker_id, 0.0, []))  # sentinel so main does not hang
+            result_queue.put((worker_id, []))  # sentinel so main does not hang
             break
 
 
 def run_training(
     num_episodes: int = 100_000,
     num_envs: int = 24,
+    episodes_per_worker: int = 1,
     snapshot_interval: int = 500,
     log_interval: int = 100,
     checkpoint_interval: int = 2000,
@@ -119,7 +124,7 @@ def run_training(
     resume_path: Optional[str] = None,
     device: str = "cuda",
 ) -> None:
-    """Run self-play PPO training. Uses num_envs parallel workers when num_envs > 1."""
+    """Run self-play PPO training. Uses num_envs parallel workers when num_envs > 1. Each worker runs episodes_per_worker episodes per batch (amortizes weight sync)."""
     os.makedirs(checkpoint_dir, exist_ok=True)
 
     network = Flip7Network()
@@ -181,6 +186,7 @@ def run_training(
         snapshot_count_ref=[snapshot_count],
         start_time=start_time,
         device=device,
+        episodes_per_worker=episodes_per_worker,
     )
 
 
@@ -283,16 +289,18 @@ def _run_training_parallel(
     snapshot_count_ref: List[int],
     start_time: float,
     device: str,
+    episodes_per_worker: int = 1,
 ) -> None:
-    """Multi-process training: num_envs workers, each runs one episode per batch, learner merges and updates."""
+    """Multi-process training: num_envs workers, each runs episodes_per_worker episodes per batch, learner merges and updates."""
     weights_queues: List[mp.Queue] = [mp.Queue() for _ in range(num_envs)]
     result_queue: mp.Queue = mp.Queue()
+    episodes_per_batch = num_envs * episodes_per_worker
 
     workers = []
     for i in range(num_envs):
         p = mp.Process(
             target=_worker_loop,
-            args=(i, weights_queues[i], result_queue, device),
+            args=(i, weights_queues[i], result_queue, device, episodes_per_worker),
             daemon=True,
         )
         p.start()
@@ -316,11 +324,11 @@ def _run_training_parallel(
             finally:
                 pass  # unlink after batch below
 
-            batch_results: List[Tuple[int, float, List[tuple]]] = [None] * num_envs  # type: ignore
+            batch_results: List[Optional[Tuple[int, List[Tuple[float, List[tuple]]]]]] = [None] * num_envs
             for _ in range(num_envs):
-                wid, episode_reward, data = result_queue.get()
-                batch_results[wid] = (wid, episode_reward, data)
-                if not data:
+                wid, batch_pairs = result_queue.get()
+                batch_results[wid] = (wid, batch_pairs)
+                if not batch_pairs or any(not d for _, d in batch_pairs):
                     raise RuntimeError(
                         f"Worker {wid} crashed or returned empty episode; aborting training."
                     )
@@ -331,29 +339,30 @@ def _run_training_parallel(
             shm_frozen.unlink()
 
             merged = TrajectoryBuffer()
-            for _wid, episode_reward, data in batch_results:
-                reward_window.append(episode_reward)
-                for tup in data:
-                    obs, action, active_head, log_prob, value, reward, done = tup
-                    merged.add(
-                        Transition(
-                            obs=obs,
-                            action=action,
-                            active_head=active_head,
-                            log_prob=log_prob,
-                            value=value,
-                            reward=reward,
-                            done=done,
+            for _wid, pairs in batch_results:
+                for episode_reward, data in pairs:
+                    reward_window.append(episode_reward)
+                    for tup in data:
+                        obs, action, active_head, log_prob, value, reward, done = tup
+                        merged.add(
+                            Transition(
+                                obs=obs,
+                                action=action,
+                                active_head=active_head,
+                                log_prob=log_prob,
+                                value=value,
+                                reward=reward,
+                                done=done,
+                            )
                         )
-                    )
 
             metrics = agent.update(merged)
             actor_loss_window.append(metrics["actor_loss"])
             critic_loss_window.append(metrics["critic_loss"])
             entropy_window.append(metrics["entropy"])
 
-            episode += num_envs
-            batch_start = episode - num_envs
+            episode += episodes_per_batch
+            batch_start = episode - episodes_per_batch
 
             # Snapshot when we crossed a snapshot_interval boundary
             if (episode - start_episode) // snapshot_interval > (batch_start - start_episode) // snapshot_interval:

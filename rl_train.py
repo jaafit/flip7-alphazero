@@ -15,6 +15,7 @@ def main() -> None:
     parser.add_argument("--eval", type=str, default=None, help="Run evaluation with checkpoint path")
     parser.add_argument("--episodes", type=int, default=100_000)
     parser.add_argument("--envs", type=int, default=1)
+    parser.add_argument("--episodes-per-worker", type=int, default=1, help="Episodes each worker runs per weight load (parallel only); amortizes sync")
     parser.add_argument("--snapshot-interval", type=int, default=500)
     parser.add_argument("--log-interval", type=int, default=100)
     parser.add_argument("--checkpoint-interval", type=int, default=2000)
@@ -31,6 +32,7 @@ def main() -> None:
     run_training(
         num_episodes=args.episodes,
         num_envs=args.envs,
+        episodes_per_worker=args.episodes_per_worker,
         snapshot_interval=args.snapshot_interval,
         log_interval=args.log_interval,
         checkpoint_interval=args.checkpoint_interval,
