@@ -14,8 +14,8 @@ from game import Game
 from player import BasePlayer, PlayerState
 
 # Observation dimension: 19*4 player + 11 deck + 2 meta = 89 (spec Section 13)
-PLAYER_BLOCK_DIM = 10
-DECK_BLOCK_DIM = 8
+PLAYER_BLOCK_DIM = 11
+DECK_BLOCK_DIM = 6
 META_DIM = 1
 OBS_DIM = PLAYER_BLOCK_DIM * 4 + DECK_BLOCK_DIM + META_DIM 
 
@@ -48,11 +48,12 @@ def _player_block(p: BasePlayer, deck: Deck, is_only_active_player: bool) -> np.
     out[2] = plus_mod_total
     out[3] = has_second_chance
     out[4] = is_active
-    out[5] = number_card_count
-    out[6] = p_bust_hit
-    out[7] = p_bust_flip3
-    out[8] = round_score
-    out[9] = total_score
+    out[5] = 1 if is_only_active_player else 0
+    out[6] = number_card_count
+    out[7] = p_bust_hit
+    out[8] = p_bust_flip3
+    out[9] = round_score
+    out[10] = total_score
     return out
 
 
@@ -65,39 +66,38 @@ def _deck_block(deck: Deck) -> np.ndarray:
         draw_cards = deck.discards().shuffle()
         n = len(draw_cards)
     
-    plus_mods = [c for c in draw_cards if c.type == CardType.MODIFIER and c.modifier != ModifierType.MULTIPLY_2]
-    excpected_draw_value = _compute_expected_draw_value(deck)
+    number_sum = sum(c.value for c in draw_cards if c.type == CardType.NUMBER)
+    plus_mod_sum = sum(c.get_points() for c in draw_cards if c.type == CardType.MODIFIER) # x2 get_points() is 0
+    excpected_draw_value = (number_sum + plus_mod_sum) / n
     
-    if plus_mods:
-        out[0] = np.mean([c.get_points() for c in plus_mods]) / 10.0
-    out[1] = len(plus_mods) / n if n else 0.0
-    out[2] = sum(1 for c in draw_cards if c.type == CardType.MODIFIER and c.modifier == ModifierType.MULTIPLY_2) / n 
-    out[3] = sum(1 for c in draw_cards if c.type == CardType.ACTION and c.action == ActionType.FLIP_THREE) / n
-    out[4] = sum(1 for c in draw_cards if c.type == CardType.ACTION and c.action == ActionType.FREEZE) / n
-    out[5] = sum(1 for c in draw_cards if c.type == CardType.ACTION and c.action == ActionType.SECOND_CHANCE) / n
-    out[6] = excpected_draw_value
-    out[7] = n / 94.0
+    out[0] = sum(1 for c in draw_cards if c.type == CardType.MODIFIER and c.modifier == ModifierType.MULTIPLY_2) / n 
+    out[1] = sum(1 for c in draw_cards if c.type == CardType.ACTION and c.action == ActionType.FLIP_THREE) / n
+    out[2] = sum(1 for c in draw_cards if c.type == CardType.ACTION and c.action == ActionType.FREEZE) / n
+    out[3] = sum(1 for c in draw_cards if c.type == CardType.ACTION and c.action == ActionType.SECOND_CHANCE) / n
+    out[4] = excpected_draw_value
+    out[5] = n / 94.0
     return out
 
 
 def _compute_bust_prob_if_hit(player: BasePlayer, deck:Deck, is_only_active_player: bool) -> float:
     """Probability of busting if current player draws one card."""
-    draw_cards = deck.cards if len(deck.cards) > 0 else deck.discards()
+    draw_cards = deck._cards if len(deck._cards) > 0 else deck._discards
     number_vals = {c.value for c in player.get_hand() if c.type == CardType.NUMBER}
     bust_count = sum(1 for c in draw_cards if c.type == CardType.NUMBER and c.value in number_vals)
     p_number_bust = bust_count / len(draw_cards)
     p_draw_flip3 = sum(1 for c in draw_cards if c.type == CardType.ACTION and c.action == ActionType.FLIP_THREE) / len(draw_cards)
-    p_flip3_bust = _compute_flip3_bust_prob(player, deck) if is_only_active_player and p_draw_flip3 else 0.0
-    return 1 - (1-p_number_bust) * (1-p_flip3_bust)
+    p_flip3_bust = _compute_flip3_bust_prob(player, deck) if is_only_active_player and p_draw_flip3 else 0.0 # todo: subtract drawn flip3
+    return 1 - (1-p_number_bust) * (1-p_flip3_bust * p_draw_flip3)
+
 
 def _compute_flip3_bust_prob(player: BasePlayer, deck: Deck) -> float:
     """P(bust) if forced to draw exactly 3 cards sequentially (no replacement)."""
     # todo: not yet accounting for possibility of drawing another flip3 card and being sole active player
     number_vals = set(c.value for c in player.get_hand() if c.type == CardType.NUMBER)
     busters_in_deck = sum(1 for c in deck.cards if c.type == CardType.NUMBER and c.value in number_vals)
-    busters_in_discards = sum(1 for c in deck.discards() if c.type == CardType.NUMBER and c.value in number_vals)
+    busters_in_discards = sum(1 for c in deck._discards if c.type == CardType.NUMBER and c.value in number_vals)
     deck_size = len(deck.cards)
-    discards_size = len(deck.discards())
+    discards_size = len(deck._discards)
     safe_prob = 1.0
     for i in range(3):
         if deck_size:
@@ -108,14 +108,6 @@ def _compute_flip3_bust_prob(player: BasePlayer, deck: Deck) -> float:
             discards_size -= 1
     return 1.0 - safe_prob
 
-
-def _compute_expected_draw_value(deck: Deck) -> float:
-    """Expected value of the next card to draw."""
-    draw_cards = deck.cards if len(deck.cards) > 0 else deck.discards()
-    n = len(draw_cards)
-    number_sum = sum(c.value for c in draw_cards if c.type == CardType.NUMBER)
-    plus_mod_sum = sum(c.get_points() for c in draw_cards if c.type == CardType.MODIFIER)
-    return (number_sum + plus_mod_sum) / n
 
 class Flip7Env:
     """Environment wrapper: game loop runs in thread; step/reset via queues."""
@@ -166,7 +158,10 @@ class Flip7Env:
         for i in range(n):
             idx = (self.agent_player_idx + i) % n
             ordered.append(players[idx])
-        blocks = [_player_block(p, game._deck) for p in ordered]
+        blocks = []
+        for p in ordered:
+            is_only_active_player = p.is_active() and not any(p2.is_active() for p2 in ordered if p2 is not p)
+            blocks.append(_player_block(p, game._deck, is_only_active_player))
         player_part = np.concatenate(blocks)
         deck_part = _deck_block(game._deck)
         meta = np.array([

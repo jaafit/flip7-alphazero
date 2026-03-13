@@ -123,7 +123,9 @@ def test_bust_probability():
         Card.new_number_card(3),
         Card.new_number_card(7),
     ]
-    p = _compute_bust_prob_if_hit(player, deck_cards)
+    deck = Deck()
+    deck._cards = deck_cards
+    p = _compute_bust_prob_if_hit(player, deck, is_only_active_player=True)
     assert 0 <= p <= 1, p
     print("test_bust_probability OK")
 

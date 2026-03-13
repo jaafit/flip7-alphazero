@@ -68,6 +68,9 @@ class Flip7Network(nn.Module):
             x = torch.from_numpy(obs).to(next(self.parameters()).device)
             logits, value = self.forward(x, active_head)
             mask_t = torch.from_numpy(legal_mask).to(device=logits.device)
+            # Broadcast mask to logits shape (e.g. [2] -> [1, 2] when obs was unsqueezed)
+            if mask_t.shape != logits.shape:
+                mask_t = mask_t.broadcast_to(logits.shape)
             logits[~mask_t] = -1e9
             dist = Categorical(logits=logits)
             if deterministic:
