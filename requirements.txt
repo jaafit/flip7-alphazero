@@ -1,2 +1,0 @@
-# Flip 7 - Python implementation
-# No external dependencies; uses only the standard library.
