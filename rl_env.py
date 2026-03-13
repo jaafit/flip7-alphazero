@@ -18,6 +18,7 @@ PLAYER_BLOCK_DIM = 11
 DECK_BLOCK_DIM = 6
 META_DIM = 1
 OBS_DIM = PLAYER_BLOCK_DIM * 4 + DECK_BLOCK_DIM + META_DIM 
+N_PLAYERS = 4
 
 
 def _player_block(p: BasePlayer, deck: Deck, is_only_active_player: bool) -> np.ndarray:
@@ -165,7 +166,7 @@ class Flip7Env:
         player_part = np.concatenate(blocks)
         deck_part = _deck_block(game._deck)
         meta = np.array([
-            game._dealer_idx / 4.0,
+            game._dealer_idx / N_PLAYERS,
         ], dtype=np.float32)
         return np.concatenate([player_part, deck_part, meta])
 
@@ -174,7 +175,7 @@ class Flip7Env:
         if self._game is None or self._agent_player is None:
             if active_head == "hit_stay":
                 return np.ones(2, dtype=bool)
-            return np.zeros(4, dtype=bool)
+            return np.zeros(N_PLAYERS, dtype=bool)
         game = self._game
         agent = self._agent_player
         players = game._players
@@ -188,15 +189,15 @@ class Flip7Env:
             return mask
 
         if active_head == "freeze" or active_head == "flip3":
-            mask = np.zeros(4, dtype=bool)
-            for i in range(4):
+            mask = np.zeros(N_PLAYERS, dtype=bool)
+            for i in range(N_PLAYERS):
                 if i < len(players) and players[i].is_active():
                     mask[i] = True
             return mask
 
         if active_head == "second_chance":
-            mask = np.zeros(4, dtype=bool)
-            for i in range(4):
+            mask = np.zeros(N_PLAYERS, dtype=bool)
+            for i in range(N_PLAYERS):
                 if i >= len(players):
                     continue
                 p = players[i]
@@ -206,10 +207,10 @@ class Flip7Env:
                     mask[i] = True
             return mask
 
-        return np.zeros(4, dtype=bool)
+        return np.zeros(N_PLAYERS, dtype=bool)
 
     def reset(self) -> Tuple[np.ndarray, Dict[str, Any]]:
-        """Construct new Game with 4 RLPlayers, run until first agent decision; return (obs, info)."""
+        """Construct new Game with N_PLAYERS RLPlayers, run until first agent decision; return (obs, info)."""
         from rl_agent_player import RLPlayer
         from rl_network import Flip7Network
         # Create a minimal network for placeholder if needed; env will set real one
@@ -227,7 +228,7 @@ class Flip7Env:
             agent_idx = self.agent_player_idx
             opponents_net = self._opponent_network or dummy_net
             players: List[BasePlayer] = []
-            for i in range(4):
+            for i in range(N_PLAYERS):
                 is_agent = i == agent_idx
                 net = dummy_net if is_agent else opponents_net
                 name = "RLAgent" if is_agent else f"RLOpp{i}"
@@ -236,7 +237,7 @@ class Flip7Env:
             game._players = players
             game._deck = Deck()
             game._round = 1
-            game._dealer_idx = random.randint(0, 3)
+            game._dealer_idx = random.randint(0, N_PLAYERS - 1)
             self._game = game
             self._agent_player = players[agent_idx]
             self._game_ready.set()
@@ -246,7 +247,7 @@ class Flip7Env:
             agent_score = self._agent_player.get_total_score()
             opponents = [p for p in game._players if p is not self._agent_player]
             opponents_beaten = sum(1 for o in opponents if agent_score > o.get_total_score())
-            reward = opponents_beaten / 3.0
+            reward = opponents_beaten / (N_PLAYERS - 1)
             self._obs_queue.put((None, None, None, reward, True))
             self._done_event.set()
 

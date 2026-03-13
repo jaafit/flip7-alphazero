@@ -13,8 +13,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Flip 7 RL training")
     parser.add_argument("--resume", type=str, default=None, help="Resume from checkpoint path")
     parser.add_argument("--eval", type=str, default=None, help="Run evaluation with checkpoint path")
-    parser.add_argument("--num-episodes", type=int, default=100_000)
-    parser.add_argument("--num-envs", type=int, default=1)
+    parser.add_argument("--episodes", type=int, default=100_000)
+    parser.add_argument("--envs", type=int, default=1)
     parser.add_argument("--snapshot-interval", type=int, default=500)
     parser.add_argument("--log-interval", type=int, default=100)
     parser.add_argument("--checkpoint-interval", type=int, default=2000)
@@ -23,14 +23,14 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.eval:
-        run_eval(args.eval, device=args.device)
+        run_eval(args.eval, device=args.device, num_games=args.episodes)
         return
 
     from rl_selfplay import run_training
 
     run_training(
-        num_episodes=args.num_episodes,
-        num_envs=args.num_envs,
+        num_episodes=args.episodes,
+        num_envs=args.envs,
         snapshot_interval=args.snapshot_interval,
         log_interval=args.log_interval,
         checkpoint_interval=args.checkpoint_interval,
@@ -96,7 +96,7 @@ def run_eval(checkpoint_path: str, device: str = "cuda", num_games: int = 1000) 
             env = Flip7Env(silent=True)
             env.set_opponent_network(network)
             players = [
-                RLPlayer("RL", network, 0, env, is_training_agent=True),
+                RLPlayer("RL", network, 0, env, is_training_agent=False),
                 ComputerPlayer(f"CPU_{name}", hit_stay, action_tgt, positive_tgt),
                 ComputerPlayer(f"CPU_{name}b", hit_stay, action_tgt, positive_tgt),
                 ComputerPlayer(f"CPU_{name}c", hit_stay, action_tgt, positive_tgt),
@@ -104,7 +104,7 @@ def run_eval(checkpoint_path: str, device: str = "cuda", num_games: int = 1000) 
             env._game = game
             env._agent_player = players[0]
             game._players = players
-            game._deck = __import__("deck").deck.Deck()
+            game._deck = __import__("deck").Deck()
             game._round = 1
             game._dealer_idx = 0
             while not game._has_winner():
@@ -121,4 +121,9 @@ def run_eval(checkpoint_path: str, device: str = "cuda", num_games: int = 1000) 
 if __name__ == "__main__":
     import multiprocessing as mp
     mp.set_start_method("spawn", force=True)
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("Interrupted by user, shutting down cleanly.")
+        # Optionally: flush logs, save a last checkpoint, etc.
+        sys.exit(0)

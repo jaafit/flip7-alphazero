@@ -378,7 +378,7 @@ def _log_progress(
     print(
         f"Ep {episode}/{num_episodes} | "
         f"eps/s {eps_per_sec:.1f} | "
-        f"reward(200) {mean_reward:.3f} | "
+        f"reward(avg) {mean_reward:.3f} | "
         f"win_rate {win_rate:.2%} | "
         f"beaten {mean_beaten:.2f} | "
         f"actor {mean_actor:.4f} critic {mean_critic:.4f} ent {mean_entropy:.4f} | "

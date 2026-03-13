@@ -128,7 +128,7 @@ class PPOAgent:
                     a_act = actions_t[idx_t]
                     adv = torch.from_numpy(A_by_head[head]).to(self.device).float().unsqueeze(1)
                     logits, value = self.network(o, head)
-                    values_all[idx_t] = value.squeeze(-1)
+                    values_all[idx_t] = value.squeeze(-1).float()
                     dist = Categorical(logits=logits)
                     new_log_prob = dist.log_prob(a_act)
                     entropy = dist.entropy().mean()

@@ -5,7 +5,7 @@ import numpy as np
 import torch
 
 from deck import Deck
-from rl_env import OBS_DIM, Flip7Env, _compute_bust_prob_if_hit
+from rl_env import OBS_DIM, N_PLAYERS, Flip7Env, _compute_bust_prob_if_hit
 from rl_network import Flip7Network
 from rl_agent import PPOAgent, TrajectoryBuffer, Transition
 
@@ -34,7 +34,7 @@ def test_legal_mask_at_start():
     assert np.any(hit_stay), "hit_stay mask should have at least one True"
     for head in ("freeze", "flip3", "second_chance"):
         m = env.get_legal_mask(head)
-        assert m.shape == (4,)
+        assert m.shape == (N_PLAYERS,)
     print("test_legal_mask_at_start OK")
 
 
@@ -80,7 +80,7 @@ def test_network_forward():
 def test_all_heads():
     net = Flip7Network()
     x = torch.zeros(1, OBS_DIM)
-    heads = [("hit_stay", 2), ("freeze", 4), ("flip3", 4), ("second_chance", 4)]
+    heads = [("hit_stay", 2), ("freeze", N_PLAYERS), ("flip3", N_PLAYERS), ("second_chance", N_PLAYERS)]
     for active_head, size in heads:
         logits, value = net.forward(x, active_head)
         assert logits.shape == (1, size), (active_head, logits.shape)

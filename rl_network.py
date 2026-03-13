@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 from torch.distributions import Categorical
 
-from rl_env import OBS_DIM
+from rl_env import OBS_DIM, N_PLAYERS
 
 
 class Flip7Network(nn.Module):
@@ -28,9 +28,9 @@ class Flip7Network(nn.Module):
             nn.ReLU(),
         )
         self.actor_hit_stay = nn.Linear(hidden_dim, 2)
-        self.actor_freeze = nn.Linear(hidden_dim, 4)
-        self.actor_flip3 = nn.Linear(hidden_dim, 4)
-        self.actor_second_chance = nn.Linear(hidden_dim, 4)
+        self.actor_freeze = nn.Linear(hidden_dim, N_PLAYERS)
+        self.actor_flip3 = nn.Linear(hidden_dim, N_PLAYERS)
+        self.actor_second_chance = nn.Linear(hidden_dim, N_PLAYERS)
         self.critic = nn.Linear(hidden_dim, 1)
 
     def _head_logits(self, h: torch.Tensor, active_head: str) -> torch.Tensor:
