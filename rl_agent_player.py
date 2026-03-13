@@ -38,7 +38,7 @@ class RLPlayer(BasePlayer):
         assert self._env_ref.has_active_game(), "RLPlayer decision called before env has an active game"
         obs = self._env_ref.encode_state(self._player_idx)
         active_head = "hit_stay"
-        legal_mask = self._env_ref.get_legal_mask(active_head)
+        legal_mask = self._env_ref.get_legal_mask(active_head, self._player_idx)
         if self._is_training_agent:
             action, _ = self._env_ref.put_obs_and_wait_action(obs, active_head, legal_mask)  # _ is active_head; buffer filled by loop that calls step()
             return action == 1  # 0=STAY, 1=HIT
@@ -48,36 +48,42 @@ class RLPlayer(BasePlayer):
             )
         return action == 1
 
+    def _action_to_game_player(self, action: int, game_state: GameState) -> BasePlayer:
+        """Map network action (observation-space index) to game player."""
+        n = len(game_state.players)
+        game_idx = (self._player_idx + action) % n
+        return game_state.players[game_idx]
+
     def choose_action_target(
         self, game_state: GameState, action_type: ActionType
     ) -> BasePlayer:
         assert self._env_ref.has_active_game(), "RLPlayer decision called before env has an active game"
         obs = self._env_ref.encode_state(self._player_idx)
         active_head = "freeze" if action_type == ActionType.FREEZE else "flip3"
-        legal_mask = self._env_ref.get_legal_mask(active_head)
+        legal_mask = self._env_ref.get_legal_mask(active_head, self._player_idx)
         if self._is_training_agent:
             action, _ = self._env_ref.put_obs_and_wait_action(obs, active_head, legal_mask)  # _ is active_head
-            return game_state.players[action]
+            return self._action_to_game_player(action, game_state)
         with torch.no_grad():
             action, _, _ = self._network.select_action(
                 obs, active_head, legal_mask, deterministic=False
             )
-        return game_state.players[action]
+        return self._action_to_game_player(action, game_state)
 
     def choose_positive_action_target(
         self, game_state: GameState, action_type: ActionType
     ) -> BasePlayer:
         assert self._env_ref.has_active_game(), "RLPlayer decision called before env has an active game"
         active_head = "second_chance"
-        legal_mask = self._env_ref.get_legal_mask(active_head)
+        legal_mask = self._env_ref.get_legal_mask(active_head, self._player_idx)
         if not legal_mask.any():
             raise RuntimeError("No legal Second Chance target")
         obs = self._env_ref.encode_state(self._player_idx)
         if self._is_training_agent:
             action, _ = self._env_ref.put_obs_and_wait_action(obs, active_head, legal_mask)  # _ is active_head
-            return game_state.players[action]
+            return self._action_to_game_player(action, game_state)
         with torch.no_grad():
             action, _, _ = self._network.select_action(
                 obs, active_head, legal_mask, deterministic=False
             )
-        return game_state.players[action]
+        return self._action_to_game_player(action, game_state)

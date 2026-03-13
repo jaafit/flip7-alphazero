@@ -169,42 +169,52 @@ class Flip7Env:
         ], dtype=np.float32)
         return np.concatenate([player_part, deck_part, meta])
 
-    def get_legal_mask(self, active_head: str) -> np.ndarray:
-        """Return boolean numpy array for the given head."""
+    def get_legal_mask(self, active_head: str, player_index: Optional[int] = None) -> np.ndarray:
+        """Return boolean numpy array for the given head, in the requesting player's observation space.
+        For N_PLAYERS heads, mask[i] = True means the player in observation block i is a valid target."""
         if self._game is None or self._agent_player is None:
             if active_head == "hit_stay":
                 return np.ones(2, dtype=bool)
             return np.zeros(N_PLAYERS, dtype=bool)
+        if player_index is None:
+            player_index = self.agent_player_idx
         game = self._game
-        agent = self._agent_player
         players = game._players
+        current = players[player_index] if player_index < len(players) else None
 
         if active_head == "hit_stay":
             mask = np.zeros(2, dtype=bool)
-            if agent.is_active():
+            if current is not None and current.is_active():
                 mask[1] = True   # HIT
-                if agent.has_cards():
+                if current.has_cards():
                     mask[0] = True  # STAY
             return mask
 
         if active_head == "freeze" or active_head == "flip3":
-            mask = np.zeros(N_PLAYERS, dtype=bool)
+            game_mask = np.zeros(N_PLAYERS, dtype=bool)
             for i in range(N_PLAYERS):
                 if i < len(players) and players[i].is_active():
-                    mask[i] = True
-            return mask
+                    game_mask[i] = True
+            # Rotate to observation space: obs block j = game player (player_index + j) % N_PLAYERS
+            return np.array(
+                [game_mask[(player_index + j) % N_PLAYERS] for j in range(N_PLAYERS)],
+                dtype=bool,
+            )
 
         if active_head == "second_chance":
-            mask = np.zeros(N_PLAYERS, dtype=bool)
+            game_mask = np.zeros(N_PLAYERS, dtype=bool)
             for i in range(N_PLAYERS):
                 if i >= len(players):
                     continue
+                if i == player_index:
+                    continue  # cannot give second chance to self
                 p = players[i]
-                if p is agent:
-                    continue
                 if p.is_active() and not p.has_second_chance():
-                    mask[i] = True
-            return mask
+                    game_mask[i] = True
+            return np.array(
+                [game_mask[(player_index + j) % N_PLAYERS] for j in range(N_PLAYERS)],
+                dtype=bool,
+            )
 
         return np.zeros(N_PLAYERS, dtype=bool)
 
