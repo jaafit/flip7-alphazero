@@ -281,12 +281,8 @@ class ComputerPlayer(BasePlayer):
             return True
         return self._hit_or_stay(self, game_state)
 
-    def choose_action_target(
-        self, game_state: GameState, action_type: ActionType
-    ) -> BasePlayer:
+    def choose_action_target(self, game_state: GameState, action_type: ActionType):
         return self._action_target(self, game_state, action_type)
 
-    def choose_positive_action_target(
-        self, game_state: GameState, action_type: ActionType
-    ) -> BasePlayer:
+    def choose_positive_action_target(self, game_state: GameState, action_type: ActionType):
         return self._positive_action_target(self, game_state, action_type)
