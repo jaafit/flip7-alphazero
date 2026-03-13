@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import os
+import pickle
 import time
 import traceback
 from collections import deque
+from multiprocessing import shared_memory
 from typing import Any, Deque, List, Optional, Tuple
 
 from rl_agent import PPOAgent, TrajectoryBuffer, Transition
@@ -63,14 +65,14 @@ def _worker_loop(
     worker_id: int,
     weights_queue: mp.Queue,
     result_queue: mp.Queue,
+    device: str,
 ) -> None:
     """Worker process: create nets and env once; each message loads state_dict and runs one episode."""
     from rl_network import Flip7Network
 
-    agent_net = Flip7Network()
+    agent_net = Flip7Network().to(device)
     agent_net.eval()
-    frozen_net = Flip7Network()
-    frozen_net.cpu()
+    frozen_net = Flip7Network().to(device)
     for p in frozen_net.parameters():
         p.requires_grad = False
     env = Flip7Env(silent=True)
@@ -81,10 +83,24 @@ def _worker_loop(
             msg = weights_queue.get()
             if msg is None:
                 break
-            agent_sd, frozen_sd = msg
+            if isinstance(msg, tuple) and len(msg) == 5 and msg[0] == "shm":
+                _, name_agent, size_agent, name_frozen, size_frozen = msg
+                shm_agent = shared_memory.SharedMemory(name=name_agent)
+                shm_frozen = shared_memory.SharedMemory(name=name_frozen)
+                try:
+                    agent_bytes = bytes(shm_agent.buf[:size_agent])
+                    frozen_bytes = bytes(shm_frozen.buf[:size_frozen])
+                    agent_sd = pickle.loads(agent_bytes)
+                    frozen_sd = pickle.loads(frozen_bytes)
+                finally:
+                    shm_agent.close()
+                    shm_frozen.close()
+            else:
+                agent_sd, frozen_sd = msg
             agent_net.load_state_dict(agent_sd)
             frozen_net.load_state_dict(frozen_sd)
-            frozen_net.cpu()
+            agent_net.to(device)
+            frozen_net.to(device)
             episode_reward, data = _worker_episode(agent_net, frozen_net, env)
             result_queue.put((worker_id, episode_reward, data))
         except Exception:
@@ -276,7 +292,7 @@ def _run_training_parallel(
     for i in range(num_envs):
         p = mp.Process(
             target=_worker_loop,
-            args=(i, weights_queues[i], result_queue),
+            args=(i, weights_queues[i], result_queue, device),
             daemon=True,
         )
         p.start()
@@ -287,8 +303,18 @@ def _run_training_parallel(
         while episode < num_episodes:
             agent_sd = {k: v.cpu().clone() for k, v in agent.network.state_dict().items()}
             frozen_sd = {k: v.cpu().clone() for k, v in frozen_net.state_dict().items()}
-            for i in range(num_envs):
-                weights_queues[i].put((agent_sd, frozen_sd))
+            agent_bytes = pickle.dumps(agent_sd)
+            frozen_bytes = pickle.dumps(frozen_sd)
+            shm_agent = shared_memory.SharedMemory(create=True, size=len(agent_bytes))
+            shm_frozen = shared_memory.SharedMemory(create=True, size=len(frozen_bytes))
+            try:
+                shm_agent.buf[:len(agent_bytes)] = agent_bytes
+                shm_frozen.buf[:len(frozen_bytes)] = frozen_bytes
+                msg = ("shm", shm_agent.name, len(agent_bytes), shm_frozen.name, len(frozen_bytes))
+                for i in range(num_envs):
+                    weights_queues[i].put(msg)
+            finally:
+                pass  # unlink after batch below
 
             batch_results: List[Tuple[int, float, List[tuple]]] = [None] * num_envs  # type: ignore
             for _ in range(num_envs):
@@ -298,6 +324,11 @@ def _run_training_parallel(
                     raise RuntimeError(
                         f"Worker {wid} crashed or returned empty episode; aborting training."
                     )
+
+            shm_agent.close()
+            shm_agent.unlink()
+            shm_frozen.close()
+            shm_frozen.unlink()
 
             merged = TrajectoryBuffer()
             for _wid, episode_reward, data in batch_results:
