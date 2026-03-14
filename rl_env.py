@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import queue
 import threading
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 import random
@@ -70,7 +70,7 @@ def _player_block(p: BasePlayer, deck: Deck, is_only_active_player: bool) -> np.
     total_score = p.get_total_score() / 300.0
 
     p_bust_hit = _compute_bust_prob_if_hit(p, deck, is_only_active_player) # TODO is lower if second chance (unless flip3 solo)
-    p_bust_flip3 = _compute_flip3_bust_prob(p, deck) 
+    p_bust_flip3 = _compute_flip3_bust_prob(p, is_only_active_player, deck) 
     
 
     out = np.zeros(PLAYER_BLOCK_DIM, dtype=np.float32)
@@ -116,29 +116,107 @@ def _compute_bust_prob_if_hit(player: BasePlayer, deck:Deck, is_only_active_play
     draw_cards = deck._cards if len(deck._cards) > 0 else deck._discards
     number_vals = {c.value for c in player.get_hand() if c.type == CardType.NUMBER}
     bust_count = sum(1 for c in draw_cards if c.type == CardType.NUMBER and c.value in number_vals)
-    p_number_bust = bust_count / len(draw_cards)
+    p_number_bust = bust_count / len(draw_cards) if not player.has_second_chance() else 0.0
+
     p_draw_flip3 = sum(1 for c in draw_cards if c.type == CardType.ACTION and c.action == ActionType.FLIP_THREE) / len(draw_cards)
-    p_flip3_bust = _compute_flip3_bust_prob(player, deck) if is_only_active_player and p_draw_flip3 else 0.0 # todo: subtract drawn flip3
+    p_flip3_bust = _compute_flip3_bust_prob(player, is_only_active_player, deck) if is_only_active_player and p_draw_flip3 else 0.0 # todo: subtract drawn flip3
+    
     return 1 - (1-p_number_bust) * (1-p_flip3_bust * p_draw_flip3)
 
 
-def _compute_flip3_bust_prob(player: BasePlayer, deck: Deck) -> float:
-    """P(bust) if forced to draw exactly 3 cards sequentially (no replacement)."""
-    # todo: not yet accounting for possibility of drawing another flip3 card and being sole active player
-    number_vals = set(c.value for c in player.get_hand() if c.type == CardType.NUMBER)
-    busters_in_deck = sum(1 for c in deck.cards if c.type == CardType.NUMBER and c.value in number_vals)
-    busters_in_discards = sum(1 for c in deck._discards if c.type == CardType.NUMBER and c.value in number_vals)
-    deck_size = len(deck.cards)
-    discards_size = len(deck._discards)
-    safe_prob = 1.0
-    for i in range(3):
-        if deck_size:
-            safe_prob *= (deck_size - busters_in_deck) / deck_size
-            deck_size -= 1
+def _would_bust_sequence(cards: List[Card], initial_number_vals: set, has_second_chance: bool) -> bool:
+    """Given an ordered sequence of 3 cards, return True if the player busts when adding them in order.
+    Non-number cards are ignored. A duplicate (value already in hand) causes bust or uses second chance."""
+    number_vals = set(initial_number_vals)
+    second_chance_left = 1 if has_second_chance else 0
+    for c in cards:
+        if c.type != CardType.NUMBER:
+            continue
+        if c.value in number_vals:
+            if second_chance_left > 0:
+                second_chance_left -= 1
+            else:
+                return True
         else:
-            safe_prob *= (discards_size - busters_in_discards) / discards_size
-            discards_size -= 1
-    return 1.0 - safe_prob
+            number_vals = number_vals | {c.value}
+    return False
+
+
+def _enumerate_draw_sequences(
+    deck_cards: List[Card], discard_cards: List[Card], d1: int, d2: int
+) -> List[Tuple[List[Card], float]]:
+    """Yield (sequence of 3 cards in draw order, probability of that sequence)."""
+    n_deck = len(deck_cards)
+    n_discards = len(discard_cards)
+    total_prob = 1.0
+    if d1 >= 1:
+        total_prob /= n_deck
+    if d1 >= 2:
+        total_prob /= n_deck - 1
+    if d1 >= 3:
+        total_prob /= n_deck - 2
+    if d2 >= 1:
+        total_prob /= n_discards
+    if d2 >= 2:
+        total_prob /= n_discards - 1
+    if d2 >= 3:
+        total_prob /= n_discards - 2
+
+    def recurse(deck_used: set, disc_used: set, seq: List[Card], depth: int) -> Iterator[Tuple[List[Card], float]]:
+        if depth == 3:
+            yield (list(seq), total_prob)
+            return
+        if depth < d1:
+            for i in range(n_deck):
+                if i in deck_used:
+                    continue
+                deck_used.add(i)
+                seq.append(deck_cards[i])
+                yield from recurse(deck_used, disc_used, seq, depth + 1)
+                seq.pop()
+                deck_used.discard(i)
+        else:
+            for i in range(n_discards):
+                if i in disc_used:
+                    continue
+                disc_used.add(i)
+                seq.append(discard_cards[i])
+                yield from recurse(deck_used, disc_used, seq, depth + 1)
+                seq.pop()
+                disc_used.discard(i)
+
+    # Build list (generator would be consumed once)
+    out: List[Tuple[List[Card], float]] = []
+    for seq, p in recurse(set(), set(), [], 0):
+        out.append((seq, p))
+    return out
+
+
+def _compute_flip3_bust_prob(player: BasePlayer, is_only_active_player: bool, deck: Deck) -> float:
+    """P(bust) if forced to draw exactly 3 cards sequentially (no replacement).
+    Draw order: first from deck, then from reshuffled discards when deck is exhausted.
+    A 'buster' is a number card whose value is already in hand; after adding a new number, that value
+    also counts as a duplicate for later draws (so drawing same value twice in the 3 causes bust).
+    With second chance, one duplicate is forgiven; two or more cause bust."""
+    number_vals = set(c.value for c in player.get_hand() if c.type == CardType.NUMBER)
+    deck_cards = list(deck.cards)
+    discard_cards = list(deck._discards)
+    n_deck = len(deck_cards)
+    n_discards = len(discard_cards)
+    if n_deck + n_discards < 3:
+        return 0.0
+
+    d1 = min(3, n_deck)
+    d2 = 3 - d1
+    if d2 > 0 and n_discards < d2:
+        return 0.0
+
+    has_sc = player.has_second_chance()
+    bust_prob = 0.0
+    for seq, p in _enumerate_draw_sequences(deck_cards, discard_cards, d1, d2):
+        if _would_bust_sequence(seq, number_vals, has_sc):
+            bust_prob += p
+    return bust_prob
 
 
 class Flip7Env:
