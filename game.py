@@ -41,6 +41,9 @@ class Game:
         self._readline = readline or (lambda: input())
         self._debug_mode = False
         self._silent_mode = False
+        self._agent_network = None
+        self._agent_n_players: Optional[int] = None
+        self._agent_env = None
 
     def set_debug_mode(self, debug: bool) -> None:
         self._debug_mode = debug
@@ -48,6 +51,11 @@ class Game:
 
     def set_silent_mode(self, silent: bool) -> None:
         self._silent_mode = silent
+
+    def set_agent_checkpoint(self, checkpoint_path: str) -> None:
+        """Load RL checkpoint; player count will be inferred from network in _setup_players."""
+        from rl_network import load_network_from_checkpoint
+        self._agent_network, self._agent_n_players = load_network_from_checkpoint(checkpoint_path)
 
     def _printf(self, fmt: str, *args: object) -> None:
         if not self._silent_mode:
@@ -63,6 +71,8 @@ class Game:
 
     def run(self) -> None:
         self._setup_players()
+        if self._agent_env is not None:
+            self._agent_env.set_game(self)
         self._println("\n🎮 Starting Flip 7! First to 200 points wins!")
         while not self._has_winner():
             self._printf("\n" + "=" * 50)
@@ -323,6 +333,9 @@ class Game:
                 p.calculate_round_score()
 
     def _setup_players(self) -> None:
+        if self._agent_n_players is not None:
+            self._setup_players_agent_mode()
+            return
         self._println("How many players total? (2-18): ")
         num_players = self._get_int_input(2, 18)
         self._printf("How many human players? (0-%d): ", num_players)
@@ -348,6 +361,35 @@ class Game:
                 return
         else:
             self._printf("\n🎮 Starting Flip 7 with %d humans and %d computers!\n", num_humans, num_computers)
+
+    def _setup_players_agent_mode(self) -> None:
+        from rl_agent_player import RLPlayer
+        from rl_env import Flip7Env
+        num_players = self._agent_n_players
+        self._printf("How many human players? (0-%d): ", num_players)
+        num_humans = self._get_int_input(0, num_players)
+        if num_humans == 1:
+            self._players.append(HumanPlayer("Human", self._readline))
+        else:
+            for i in range(num_humans):
+                self._printf("Enter name for Human Player %d: ", i + 1)
+                name = self._get_string_input()
+                self._players.append(HumanPlayer(name, self._readline))
+        self._agent_env = Flip7Env()
+        num_agents = num_players - num_humans
+        for i in range(num_agents):
+            player_idx = num_humans + i
+            pl = RLPlayer(
+                f"Agent{i}",
+                self._agent_network,
+                player_idx,
+                self._agent_env,
+                is_training_agent=False,
+                show_obs_and_head=True,
+            )
+            self._players.append(pl)
+            self._printf("  → Added: %s (checkpoint agent)\n", pl.get_name())
+        self._printf("\n🎮 Starting Flip 7 with %d human(s) and %d checkpoint agent(s)!\n", num_humans, num_agents)
 
     def _get_computer_player_setup(
         self, computer_num: int, names_pool: List[str]

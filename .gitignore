@@ -1,4 +1,6 @@
 .cursor/
+.vscode/
+checkpoints/
 __pycache__/
 *.py[cod]
 *.pyo

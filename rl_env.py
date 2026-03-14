@@ -21,10 +21,39 @@ OBS_DIM = PLAYER_BLOCK_DIM * 4 + DECK_BLOCK_DIM + META_DIM
 N_PLAYERS = 4
 
 
+def format_obs(obs: np.ndarray) -> str:
+    """Return obs as readable string with labels; values rounded to nearest hundredth."""
+    n = len(obs)
+    player_part_len = n - DECK_BLOCK_DIM - META_DIM
+    if player_part_len <= 0 or player_part_len % PLAYER_BLOCK_DIM != 0:
+        return str(obs.round(2))
+    n_players = player_part_len // PLAYER_BLOCK_DIM
+    player_labels = [
+        "num_sum", "num_cnt", "x2", "mods", "sc", "active", "solo",
+        "pbust", "pbust_f3", "round", "total",
+    ]
+    parts: List[str] = []
+    for i in range(n_players):
+        start = i * PLAYER_BLOCK_DIM
+        block = obs[start : start + PLAYER_BLOCK_DIM]
+        pairs = ", ".join(f"{k}={round(float(v), 2)}" for k, v in zip(player_labels, block))
+        parts.append(f"Player{i + 1}: {pairs}")
+    deck_start = n_players * PLAYER_BLOCK_DIM
+    deck_labels = ["p_x2", "p_f3", "p_fz", "p_sc", "ev", "ncards"]
+    deck_block = obs[deck_start : deck_start + DECK_BLOCK_DIM]
+    deck_str = ", ".join(f"{k}={round(float(v), 2)}" for k, v in zip(deck_labels, deck_block))
+    parts.append(f"Deck: {deck_str}")
+    if META_DIM and deck_start + DECK_BLOCK_DIM < n:
+        meta_val = round(float(obs[deck_start + DECK_BLOCK_DIM]), 2)
+        parts.append(f"meta: dealer_norm={meta_val}")
+    return ". ".join(parts)
+
+
+
 def _player_block(p: BasePlayer, deck: Deck, is_only_active_player: bool) -> np.ndarray:
     """Encode one player."""
     number_cards = [c for c in p.get_hand() if c.type == CardType.NUMBER]
-    number_card_value = float(sum(c.value for c in number_cards))
+    number_card_value = float(sum(c.value for c in number_cards)) / (12+11+10+9+8+7)
     has_x2 = 1.0 if any(
         c.type == CardType.MODIFIER and c.modifier == ModifierType.MULTIPLY_2
         for c in p.get_hand()
@@ -35,22 +64,23 @@ def _player_block(p: BasePlayer, deck: Deck, is_only_active_player: bool) -> np.
     ) / 30.0
     has_second_chance = 1.0 if p.has_second_chance() else 0.0
     is_active = 1.0 if p.is_active() else 0.0
-    number_card_count = float(len(number_cards))
-    round_score = p.calculate_round_score() / 300.0
+    number_card_count = float(len(number_cards)) / 7.0
+    # Round score max: (12+11+10+9+8+7)*2 + (2+4+6+8+10) + 15 = 171 (theoretical; rarely reached)
+    round_score = p.calculate_round_score() / 171.0
     total_score = p.get_total_score() / 300.0
 
-    p_bust_hit = _compute_bust_prob_if_hit(p, deck, is_only_active_player)
+    p_bust_hit = _compute_bust_prob_if_hit(p, deck, is_only_active_player) # TODO is lower if second chance (unless flip3 solo)
     p_bust_flip3 = _compute_flip3_bust_prob(p, deck) 
     
 
     out = np.zeros(PLAYER_BLOCK_DIM, dtype=np.float32)
     out[0] = number_card_value
-    out[1] = has_x2
-    out[2] = plus_mod_total
-    out[3] = has_second_chance
-    out[4] = is_active
-    out[5] = 1 if is_only_active_player else 0
-    out[6] = number_card_count
+    out[1] = number_card_count
+    out[2] = has_x2
+    out[3] = plus_mod_total
+    out[4] = has_second_chance
+    out[5] = is_active
+    out[6] = 1 if is_only_active_player else 0
     out[7] = p_bust_hit
     out[8] = p_bust_flip3
     out[9] = round_score
@@ -82,6 +112,7 @@ def _deck_block(deck: Deck) -> np.ndarray:
 
 def _compute_bust_prob_if_hit(player: BasePlayer, deck:Deck, is_only_active_player: bool) -> float:
     """Probability of busting if current player draws one card."""
+    
     draw_cards = deck._cards if len(deck._cards) > 0 else deck._discards
     number_vals = {c.value for c in player.get_hand() if c.type == CardType.NUMBER}
     bust_count = sum(1 for c in draw_cards if c.type == CardType.NUMBER and c.value in number_vals)
@@ -144,20 +175,22 @@ class Flip7Env:
         self._trajectory_buffer = buf
 
     def has_active_game(self) -> bool:
-        """True if a game is running and agent player is set (safe to call encode_state)."""
-        return self._game is not None and self._agent_player is not None
+        """True if a game is running (external game set via set_game) or agent player is set."""
+        return self._game is not None
 
-    def encode_state(self, player_index:int) -> np.ndarray:
-        """Build OBS_DIM float32 array from current game state (agent perspective)."""
-        if self._game is None or self._agent_player is None:
+    def set_game(self, game: Optional[Game]) -> None:
+        """Set external game for interactive play (encode_state/get_legal_mask use this game)."""
+        self._game = game
+
+    def encode_state(self, player_index: int) -> np.ndarray:
+        """Build obs float32 array from current game state (agent perspective)."""
+        if self._game is None:
             return np.zeros(OBS_DIM, dtype=np.float32)
         game = self._game
         players = game._players
         n = len(players)
-        ordered: List[BasePlayer] = []
-        for i in range(n):
-            idx = (player_index + i) % n
-            ordered.append(players[idx])
+        relative_dealer_idx = (game._dealer_idx - player_index) % n
+        ordered = [players[(player_index + i) % n] for i in range(n)]
         blocks = []
         for p in ordered:
             is_only_active_player = p.is_active() and not any(p2.is_active() for p2 in ordered if p2 is not p)
@@ -165,14 +198,14 @@ class Flip7Env:
         player_part = np.concatenate(blocks)
         deck_part = _deck_block(game._deck)
         meta = np.array([
-            game._dealer_idx / N_PLAYERS,
+            relative_dealer_idx / n,
         ], dtype=np.float32)
         return np.concatenate([player_part, deck_part, meta])
 
     def get_legal_mask(self, active_head: str, player_index: Optional[int] = None) -> np.ndarray:
         """Return boolean numpy array for the given head, in the requesting player's observation space.
-        For N_PLAYERS heads, mask[i] = True means the player in observation block i is a valid target."""
-        if self._game is None or self._agent_player is None:
+        For n-player heads, mask[i] = True means the player in observation block i is a valid target."""
+        if self._game is None:
             if active_head == "hit_stay":
                 return np.ones(2, dtype=bool)
             return np.zeros(N_PLAYERS, dtype=bool)
@@ -180,7 +213,8 @@ class Flip7Env:
             player_index = self.agent_player_idx
         game = self._game
         players = game._players
-        current = players[player_index] if player_index < len(players) else None
+        n = len(players)
+        current = players[player_index] if player_index < n else None
 
         if active_head == "hit_stay":
             mask = np.zeros(2, dtype=bool)
@@ -191,32 +225,29 @@ class Flip7Env:
             return mask
 
         if active_head == "freeze" or active_head == "flip3":
-            game_mask = np.zeros(N_PLAYERS, dtype=bool)
-            for i in range(N_PLAYERS):
-                if i < len(players) and players[i].is_active():
+            game_mask = np.zeros(n, dtype=bool)
+            for i in range(n):
+                if players[i].is_active():
                     game_mask[i] = True
-            # Rotate to observation space: obs block j = game player (player_index + j) % N_PLAYERS
             return np.array(
-                [game_mask[(player_index + j) % N_PLAYERS] for j in range(N_PLAYERS)],
+                [game_mask[(player_index + j) % n] for j in range(n)],
                 dtype=bool,
             )
 
         if active_head == "second_chance":
-            game_mask = np.zeros(N_PLAYERS, dtype=bool)
-            for i in range(N_PLAYERS):
-                if i >= len(players):
-                    continue
+            game_mask = np.zeros(n, dtype=bool)
+            for i in range(n):
                 if i == player_index:
-                    continue  # cannot give second chance to self
+                    continue
                 p = players[i]
                 if p.is_active() and not p.has_second_chance():
                     game_mask[i] = True
             return np.array(
-                [game_mask[(player_index + j) % N_PLAYERS] for j in range(N_PLAYERS)],
+                [game_mask[(player_index + j) % n] for j in range(n)],
                 dtype=bool,
             )
 
-        return np.zeros(N_PLAYERS, dtype=bool)
+        return np.zeros(n, dtype=bool)
 
     def reset(self) -> Tuple[np.ndarray, Dict[str, Any]]:
         """Construct new Game with N_PLAYERS RLPlayers, run until first agent decision; return (obs, info)."""
