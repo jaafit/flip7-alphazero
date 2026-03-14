@@ -13,6 +13,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Flip 7 RL training")
     parser.add_argument("--resume", type=str, default=None, help="Resume from checkpoint path")
     parser.add_argument("--eval", type=str, default=None, help="Run evaluation with checkpoint path")
+    parser.add_argument("--opponent", type=str, default=None, help="Opponent strategy")
     parser.add_argument("--episodes", type=int, default=100_000)
     parser.add_argument("--envs", type=int, default=1)
     parser.add_argument("--episodes-per-worker", type=int, default=1, help="Episodes each worker runs per weight load (parallel only); amortizes sync")
@@ -24,7 +25,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.eval:
-        run_eval(args.eval, device=args.device, num_games=args.episodes)
+        run_eval(args.eval, device=args.device, opponent=args.opponent)
         return
 
     from rl_selfplay import run_training
@@ -42,8 +43,8 @@ def main() -> None:
     )
 
 
-def run_eval(checkpoint_path: str, device: str = "cuda", num_games: int = 1000) -> None:
-    """Run 1000 games: RL agent (deterministic) vs ComputerPlayer strategies; print win-rate table."""
+def run_eval(checkpoint_path: str, device: str = "cuda", opponent: str = None) -> None:
+    """Run games: RL agent (deterministic) vs ComputerPlayer strategies; print win-rate table."""
     from game import Game
     from rl_env import Flip7Env
     from computer_player import (
@@ -88,8 +89,12 @@ def run_eval(checkpoint_path: str, device: str = "cuda", num_games: int = 1000) 
     print("Strategy          | RL Wins | Total | Win %")
     print("-" * 45)
 
+    if opponent is not None:
+        strategies = [s for s in strategies if s[0] == opponent]
+
     for name, hit_stay in strategies:
         rl_wins = 0
+        num_games = 100 if opponent is None else 1000
         for _ in range(num_games):
             game = Game()
             game.set_silent_mode(True)
