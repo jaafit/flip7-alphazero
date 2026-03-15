@@ -14,12 +14,12 @@ def main() -> None:
     parser.add_argument("--resume", type=str, default=None, help="Resume from checkpoint path")
     parser.add_argument("--eval", type=str, default=None, help="Run evaluation with checkpoint path")
     parser.add_argument("--opponent", type=str, default=None, help="Opponent strategy")
-    parser.add_argument("--episodes", type=int, default=100_000)
+    parser.add_argument("--episodes", type=int, default=3_000_000)
     parser.add_argument("--envs", type=int, default=1)
     parser.add_argument("--episodes-per-worker", type=int, default=1, help="Episodes each worker runs per weight load (parallel only); amortizes sync")
-    parser.add_argument("--snapshot-interval", type=int, default=500)
+    parser.add_argument("--snapshot-interval", type=int, default=1000)
     parser.add_argument("--log-interval", type=int, default=100)
-    parser.add_argument("--checkpoint-interval", type=int, default=2000)
+    parser.add_argument("--checkpoint-interval", type=int, default=4000)
     parser.add_argument("--checkpoint-dir", type=str, default="checkpoints/")
     parser.add_argument("--device", type=str, default="cuda")
     args = parser.parse_args()
@@ -86,16 +86,19 @@ def run_eval(checkpoint_path: str, device: str = "cuda", opponent: str = None) -
     action_tgt = target_leader_strategy
     positive_tgt = target_last_place_strategy
 
-    print("Strategy          | RL Wins | Total | Win %")
+    print("Strategy          | Dfeated | Avg Def | Wins    | Win %  ")
     print("-" * 45)
 
     if opponent is not None:
         strategies = [s for s in strategies if s[0] == opponent]
 
     for name, hit_stay in strategies:
+        defeated_players = 0
         rl_wins = 0
         num_games = 100 if opponent is None else 1000
-        for _ in range(num_games):
+        for i in range(num_games):
+            if i % (num_games/10) == 0 and i > 0 and opponent is not None:
+                print(f"Game {i} of {num_games}")
             game = Game()
             game.set_silent_mode(True)
             from rl_agent_player import RLPlayer
@@ -121,8 +124,12 @@ def run_eval(checkpoint_path: str, device: str = "cuda", opponent: str = None) -
             winner = max(game._players, key=lambda p: p.get_total_score())
             if winner is players[0]:
                 rl_wins += 1
-        pct = 100.0 * rl_wins / num_games
-        print(f"{name:17} | {rl_wins:7} | {num_games:5} | {pct:5.1f}%")
+            pct_wins = 100.0 * rl_wins / num_games
+            for p in game._players[1:]:
+                if p.get_total_score() < players[0].get_total_score():
+                    defeated_players += 1
+        avg_defeated_players = defeated_players / num_games
+        print(f"{name:17} | {defeated_players:7} | {avg_defeated_players:3.3f} | {rl_wins:7} | {pct_wins:5.1f}%")
 
 
 if __name__ == "__main__":
