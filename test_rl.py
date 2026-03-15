@@ -134,7 +134,7 @@ def test_bust_probability():
     ]
     deck = Deck()
     deck._cards = deck_cards
-    p = _compute_bust_prob_if_hit(player, deck, is_only_active_player=True)
+    p = _compute_bust_prob_if_hit(player, deck)
     assert 0 <= p <= 1, p
     print("test_bust_probability OK")
 
@@ -166,134 +166,6 @@ def test_checkpoint_roundtrip():
     assert a1 == a2, (a1, a2)
     print("test_checkpoint_roundtrip OK")
 
-
-def _simulate_flip3_trials(deck_list, discard_list, number_vals, has_second_chance, n_trials=1000, seed=None):
-    """Run n_trials flip-3 simulations; return empirical bust proportion.
-    Each trial: shuffle deck and discards, draw 3 in order (deck first, then reshuffle discards when empty).
-    Process each card in order: a number that duplicates current hand causes bust (or uses second chance);
-    a new number is added to hand so drawing that value again later would bust.
-    If seed is not None, RNG is reset at the start (for reproducibility)."""
-    if seed is not None:
-        random.seed(seed)
-    busts = 0
-    for _ in range(n_trials):
-        deck = copy.copy(deck_list)
-        discards = copy.copy(discard_list)
-        random.shuffle(deck)
-        random.shuffle(discards)
-        drawn = []
-        for _ in range(3):
-            if not deck:
-                deck = discards
-                discards = []
-                random.shuffle(deck)
-            drawn.append(deck.pop())
-        # Process in order: duplicate = bust (or second chance); new number grows hand
-        hand_vals = set(number_vals)
-        second_chance_left = 1 if has_second_chance else 0
-        busted = False
-        for c in drawn:
-            if c.type != CardType.NUMBER:
-                continue
-            if c.value in hand_vals:
-                if second_chance_left > 0:
-                    second_chance_left -= 1
-                else:
-                    busted = True
-                    break
-            else:
-                hand_vals = hand_vals | {c.value}
-        if busted:
-            busts += 1
-    return busts / n_trials
-
-
-def test_flip3_bust_prob_without_second_chance():
-    """Empirical flip-3 bust rate (no second chance) should match _compute_flip3_bust_prob at 99% confidence."""
-    # Hand has a 5 → any number card with value 5 in the 3 draws is a buster
-    deck_list = [
-        Card.new_number_card(3),
-        Card.new_number_card(2),
-    ]
-    discard_list = [
-        Card.new_number_card(9),
-        Card.new_number_card(7),
-        Card.new_number_card(5),
-        Card.new_number_card(4),
-        Card.new_number_card(6),
-    ]
-    number_vals = {5}
-    has_second_chance = False
-
-    player = BasePlayer("t")
-    player.add_card(Card.new_number_card(5))
-    deck = Deck()
-    deck._cards = list(deck_list)
-    deck._discards = list(discard_list)
-
-    p_pred = _compute_flip3_bust_prob(player, True, deck)
-    n_trials = 10000
-    n_seeds = 5
-    # Use multiple seeds so a single unlucky seed doesn't fail the test
-    p_hats = [
-        _simulate_flip3_trials(deck_list, discard_list, number_vals, has_second_chance, n_trials=n_trials, seed=s)
-        for s in range(n_seeds)
-    ]
-    p_hat = sum(p_hats) / n_seeds
-    # Margin for the mean of n_seeds runs of n_trials each
-    n_effective = n_trials * n_seeds
-    margin = 2.576 * math.sqrt(p_pred * (1 - p_pred) / n_effective)
-    if abs(p_hat - p_pred) > margin:
-        raise AssertionError(
-            f"Flip-3 bust prob (no second chance): predicted={p_pred:.4f}, empirical mean={p_hat:.4f} "
-            f"(n_seeds={n_seeds}, n_trials={n_trials}); 99%% CI margin={margin:.4f}"
-        )
-    print(f"test_flip3_bust_prob_without_second_chance {p_pred:.4f} OK")
-
-
-def test_flip3_bust_prob_with_second_chance():
-    """Empirical flip-3 bust rate (with second chance) should match _compute_flip3_bust_prob at 99% confidence."""
-    deck_list = [
-        Card.new_number_card(5),
-        Card.new_number_card(3),
-        Card.new_number_card(7),
-        Card.new_number_card(3),
-        Card.new_number_card(9),
-        Card.new_number_card(10),
-        Card.new_number_card(11),
-    ]
-    discard_list = [
-        Card.new_number_card(5),
-        Card.new_number_card(4),
-        Card.new_number_card(5),
-        Card.new_number_card(1),
-    ]
-    number_vals = {5}
-    has_second_chance = True
-
-    player = BasePlayer("t")
-    player.add_card(Card.new_number_card(5))
-    player.add_card(Card.new_action_card(ActionType.SECOND_CHANCE))
-    deck = Deck()
-    deck._cards = list(deck_list)
-    deck._discards = list(discard_list)
-
-    p_pred = _compute_flip3_bust_prob(player, True, deck)
-    n_trials = 10000
-    n_seeds = 5
-    p_hats = [
-        _simulate_flip3_trials(deck_list, discard_list, number_vals, has_second_chance, n_trials=n_trials, seed=s)
-        for s in range(n_seeds)
-    ]
-    p_hat = sum(p_hats) / n_seeds
-    n_effective = n_trials * n_seeds
-    margin = 2.576 * math.sqrt(p_pred * (1 - p_pred) / n_effective)
-    if abs(p_hat - p_pred) > margin:
-        raise AssertionError(
-            f"Flip-3 bust prob (with second chance): predicted={p_pred:.4f}, empirical mean={p_hat:.4f} "
-            f"(n_seeds={n_seeds}, n_trials={n_trials}); 99%% CI margin={margin:.4f}"
-        )
-    print(f"test_flip3_bust_prob_with_second_chance {p_pred:.4f} OK")
 
 
 def main():
