@@ -60,8 +60,9 @@ class RLPlayer(BasePlayer):
     ) -> int:
         """Call network for action (inference only); optionally print obs/logits."""
         with torch.no_grad():
+            # Greedy (argmax) when playing; stochastic only during training
             out = self._network.select_action(
-                obs, active_head, legal_mask, deterministic=False, return_logits=self._show_obs_and_head
+                obs, active_head, legal_mask, deterministic=not self._is_training_agent, return_logits=self._show_obs_and_head
             )
         action = int(out[0])
         if self._show_obs_and_head:
