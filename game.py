@@ -257,7 +257,8 @@ class Game:
                 err = target.add_card(drawn)
                 if err:
                     self._handle_card_add_error(target, drawn, err)
-                    break
+                    if "flip7" in err or "bust" in err:
+                        break
         self._deck.discard_card(card)
 
     def _handle_second_chance_card(self, player: BasePlayer, card: Card) -> None:
