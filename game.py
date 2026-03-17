@@ -167,6 +167,8 @@ class Game:
 
     def _play_turns(self) -> None:
         self._pause_until_enter()  # Pause before first player acts
+        turn_steps = 0
+        max_turn_steps = 2000  # runaway guard: one round should not exceed this many actions
         while self._has_active_players():
             n = len(self._players)
             for i in range(n):
@@ -174,6 +176,11 @@ class Game:
                 player = self._players[idx]
                 if not player.is_active():
                     continue
+                turn_steps += 1
+                if turn_steps > max_turn_steps:
+                    raise RuntimeError(
+                        f"_play_turns exceeded {max_turn_steps} steps in one round; possible infinite loop"
+                    )
                 if not player.has_cards():
                     self._printf("🎯 %s has no number cards and must HIT\n", player.get_name())
                     self._player_hit(player)

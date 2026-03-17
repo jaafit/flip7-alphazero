@@ -212,17 +212,27 @@ def _run_training_single_process(
     env = Flip7Env(silent=False)
     env.set_opponent_network(frozen_net)
     buffer = TrajectoryBuffer()
+    print("Training started (single process).", flush=True)
 
     for episode in range(start_episode, num_episodes):
         buffer.clear()
+        if episode == start_episode:
+            print("First episode: calling env.reset()...", flush=True)
         obs, info = env.reset()
+        if episode == start_episode:
+            print("First episode: got first obs, stepping.", flush=True)
         active_head = info["active_head"]
         legal_mask = info["legal_mask"]
 
+        step_count = 0
         while True:
+            if episode == start_episode and step_count < 3:
+                print(f"  First episode step {step_count}: selecting action...", flush=True)
             action, log_prob, value = network.select_action(
                 obs, active_head, legal_mask, deterministic=False
             )
+            if episode == start_episode and step_count < 3:
+                print(f"  First episode step {step_count}: action={action}, calling env.step()...", flush=True)
             buffer.add(
                 Transition(
                     obs=obs,
@@ -235,6 +245,9 @@ def _run_training_single_process(
                 )
             )
             obs, reward, done, info = env.step(action, active_head)
+            if episode == start_episode and step_count < 3:
+                print(f"  First episode step {step_count}: step() returned.", flush=True)
+            step_count += 1
             if done:
                 buffer.set_final_reward(reward)
                 reward_window.append(reward)

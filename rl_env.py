@@ -13,12 +13,14 @@ from deck import Deck
 from game import Game
 from player import BasePlayer, PlayerState
 
-# Observation dimension: 10*4 player + 6 deck + 1 meta (flip3 bust prob removed; use num_cnt, sc, pbust as proxies)
-PLAYER_BLOCK_DIM = 10
-DECK_BLOCK_DIM = 6
-META_DIM = 1
-OBS_DIM = PLAYER_BLOCK_DIM * 4 + DECK_BLOCK_DIM + META_DIM
 N_PLAYERS = 4
+
+# Observation dimension: 10*4 player + 6 deck + 1 meta (flip3 bust prob removed; use num_cnt, sc, pbust as proxies)
+PLAYER_BLOCK_DIM = 11
+DECK_BLOCK_DIM = 6
+META_DIM = 3
+OBS_DIM = PLAYER_BLOCK_DIM * N_PLAYERS + DECK_BLOCK_DIM + META_DIM
+
 
 
 def format_obs(obs: np.ndarray) -> str:
@@ -29,8 +31,8 @@ def format_obs(obs: np.ndarray) -> str:
         return str(obs.round(2))
     n_players = player_part_len // PLAYER_BLOCK_DIM
     player_labels = [
-        "num_sum", "num_cnt", "x2", "mods", "sc", "active", "solo",
-        "pbust", "round", "total",
+        "num_sum", "num_cnt", "x2", "mods", "sc", "active",
+        "pbust", "round", "owed", "kept", "bags",
     ]
     parts: List[str] = []
     for i in range(n_players):
@@ -43,17 +45,20 @@ def format_obs(obs: np.ndarray) -> str:
     deck_block = obs[deck_start : deck_start + DECK_BLOCK_DIM]
     deck_str = ", ".join(f"{k}={round(float(v), 2)}" for k, v in zip(deck_labels, deck_block))
     parts.append(f"Deck: {deck_str}")
+
+    meta_labels = ["dealer_norm", "solo", "is_last_round"]
     if META_DIM and deck_start + DECK_BLOCK_DIM < n:
-        meta_val = round(float(obs[deck_start + DECK_BLOCK_DIM]), 2)
-        parts.append(f"meta: dealer_norm={meta_val}")
+        meta_block = obs[deck_start + DECK_BLOCK_DIM : deck_start + DECK_BLOCK_DIM + META_DIM]
+        pairs = ", ".join(f"{k}={round(float(v), 2)}" for k, v in zip(meta_labels, meta_block))
+        parts.append(f"meta: {pairs}")
     return ". ".join(parts)
 
 
 
-def _player_block(p: BasePlayer, deck: Deck, is_only_active_player: bool) -> np.ndarray:
+def _player_block(p: BasePlayer, deck: Deck, bags: int) -> np.ndarray:
     """Encode one player. Flip3 bust not in obs; agent can use num_cnt, sc, pbust as proxies for target choice."""
     number_cards = [c for c in p.get_hand() if c.type == CardType.NUMBER]
-    number_card_value = float(sum(c.value for c in number_cards)) / (12+11+10+9+8+7)
+    number_card_value = float(sum(c.value for c in number_cards))
     has_x2 = 1.0 if any(
         c.type == CardType.MODIFIER and c.modifier == ModifierType.MULTIPLY_2
         for c in p.get_hand()
@@ -61,27 +66,29 @@ def _player_block(p: BasePlayer, deck: Deck, is_only_active_player: bool) -> np.
     plus_mod_total = sum(
         c.get_points() for c in p.get_hand()
         if c.type == CardType.MODIFIER and c.modifier != ModifierType.MULTIPLY_2
-    ) / 30.0
+    )
     has_second_chance = 1.0 if p.has_second_chance() else 0.0
     is_active = 1.0 if p.is_active() else 0.0
-    number_card_count = float(len(number_cards)) / 7.0
+    number_card_count = float(len(number_cards))
     # Round score max: (12+11+10+9+8+7)*2 + (2+4+6+8+10) + 15 = 171 (theoretical; rarely reached)
-    round_score = p.calculate_round_score() / 171.0
-    total_score = p.get_total_score() / 300.0
+    round_score = p.calculate_round_score() 
+    potential_score = (p.get_total_score() + round_score)
+    total_score = p.get_total_score() + (round_score if not p.is_active() else 0)
 
     p_bust_hit = _compute_bust_prob_if_hit(p, deck)
 
     out = np.zeros(PLAYER_BLOCK_DIM, dtype=np.float32)
-    out[0] = number_card_value
-    out[1] = number_card_count
+    out[0] = number_card_value / (12+11+10+9+8+7)
+    out[1] = number_card_count / 6.0
     out[2] = has_x2
-    out[3] = plus_mod_total
+    out[3] = plus_mod_total / 30.0
     out[4] = has_second_chance
     out[5] = is_active
-    out[6] = 1 if is_only_active_player else 0
-    out[7] = p_bust_hit
-    out[8] = round_score
-    out[9] = total_score
+    out[6] = p_bust_hit
+    out[7] = round_score / 171.0
+    out[8] = potential_score / 300.0
+    out[9] = total_score / 300.0
+    out[10] = bags / (N_PLAYERS - 1)
     return out
 
 
@@ -90,19 +97,20 @@ def _deck_block(deck: Deck) -> np.ndarray:
     draw_cards = deck.cards
     n = len(draw_cards)
     out = np.zeros(DECK_BLOCK_DIM, dtype=np.float32)
-    if n == 0: 
-        draw_cards = deck.discards().shuffle()
+    if n == 0:
+        draw_cards = deck.discards()
         n = len(draw_cards)
-    
+    if n == 0:
+        return out  # no cards to sample; leave features at 0
     number_sum = sum(c.value for c in draw_cards if c.type == CardType.NUMBER)
     plus_mod_sum = sum(c.get_points() for c in draw_cards if c.type == CardType.MODIFIER) # x2 get_points() is 0
-    excpected_draw_value = (number_sum + plus_mod_sum) / n / 12.0
+    excpected_draw_value = (number_sum + plus_mod_sum) / n
     
     out[0] = sum(1 for c in draw_cards if c.type == CardType.MODIFIER and c.modifier == ModifierType.MULTIPLY_2) / n 
     out[1] = sum(1 for c in draw_cards if c.type == CardType.ACTION and c.action == ActionType.FLIP_THREE) / n
     out[2] = sum(1 for c in draw_cards if c.type == CardType.ACTION and c.action == ActionType.FREEZE) / n
     out[3] = sum(1 for c in draw_cards if c.type == CardType.ACTION and c.action == ActionType.SECOND_CHANCE) / n
-    out[4] = excpected_draw_value
+    out[4] = excpected_draw_value / 12.0
     out[5] = n / 94.0
     return out
 
@@ -110,9 +118,11 @@ def _deck_block(deck: Deck) -> np.ndarray:
 def _compute_bust_prob_if_hit(player: BasePlayer, deck: Deck) -> float:
     """Probability of busting if current player draws one (number) card. Flip3 branch omitted for speed."""
     draw_cards = deck._cards if len(deck._cards) > 0 else deck._discards
+    if not draw_cards or player.has_second_chance():
+        return 0.0
     number_vals = {c.value for c in player.get_hand() if c.type == CardType.NUMBER}
     bust_count = sum(1 for c in draw_cards if c.type == CardType.NUMBER and c.value in number_vals)
-    return bust_count / len(draw_cards) if not player.has_second_chance() else 0.0
+    return bust_count / len(draw_cards)
 
 
 class Flip7Env:
@@ -165,14 +175,26 @@ class Flip7Env:
         n = len(players)
         relative_dealer_idx = (game._dealer_idx - player_index) % n
         ordered = [players[(player_index + i) % n] for i in range(n)]
+        potential_scores = [p.get_total_score() + p.calculate_round_score() for p in ordered]
         blocks = []
-        for p in ordered:
-            is_only_active_player = p.is_active() and not any(p2.is_active() for p2 in ordered if p2 is not p)
-            blocks.append(_player_block(p, game._deck, is_only_active_player))
+        solo = 0
+        for i, p in enumerate(ordered):
+            if p.is_active() and not any(p2.is_active() for p2 in ordered if p2 is not p):
+                solo = 1
+            bags = 0
+            p_potential_score = potential_scores[i]
+            for j in range(n):
+                if j != i:
+                    if potential_scores[j] < p_potential_score:
+                        bags += 1
+            blocks.append(_player_block(p, game._deck, bags))
         player_part = np.concatenate(blocks)
         deck_part = _deck_block(game._deck)
+        is_last_round = 1 if any(score > 200 and not ordered[i].is_active() for i, score in enumerate(potential_scores)) else 0
         meta = np.array([
             relative_dealer_idx / n,
+            solo,
+            is_last_round,
         ], dtype=np.float32)
         return np.concatenate([player_part, deck_part, meta])
 
@@ -237,33 +259,42 @@ class Flip7Env:
         self._current_legal_mask = None
 
         def run_game() -> None:
-            game = Game()
-            game.set_silent_mode(True)
-            agent_idx = self.agent_player_idx
-            opponents_net = self._opponent_network or dummy_net
-            players: List[BasePlayer] = []
-            for i in range(N_PLAYERS):
-                is_agent = i == agent_idx
-                net = dummy_net if is_agent else opponents_net
-                name = "RLAgent" if is_agent else f"RLOpp{i}"
-                pl = RLPlayer(name, net, i, self, is_agent)
-                players.append(pl)
-            game._players = players
-            game._deck = Deck()
-            game._round = 1
-            game._dealer_idx = random.randint(0, N_PLAYERS - 1)
-            self._game = game
-            self._agent_player = players[agent_idx]
-            self._game_ready.set()
-            while not game._has_winner():
-                game._play_round()
-                game._next_round()
-            agent_score = self._agent_player.get_total_score()
-            opponents = [p for p in game._players if p is not self._agent_player]
-            opponents_beaten = sum(1 for o in opponents if agent_score > o.get_total_score())
-            reward = opponents_beaten / (N_PLAYERS - 1)
-            self._obs_queue.put((None, None, None, reward, True))
-            self._done_event.set()
+            try:
+                game = Game()
+                game.set_silent_mode(True)
+                agent_idx = self.agent_player_idx
+                opponents_net = self._opponent_network or dummy_net
+                players: List[BasePlayer] = []
+                for i in range(N_PLAYERS):
+                    is_agent = i == agent_idx
+                    net = dummy_net if is_agent else opponents_net
+                    name = "RLAgent" if is_agent else f"RLOpp{i}"
+                    pl = RLPlayer(name, net, i, self, is_agent)
+                    players.append(pl)
+                game._players = players
+                game._deck = Deck()
+                game._round = 1
+                game._dealer_idx = random.randint(0, N_PLAYERS - 1)
+                self._game = game
+                self._agent_player = players[agent_idx]
+                self._game_ready.set()
+                while not game._has_winner():
+                    game._play_round()
+                    game._next_round()
+                agent_score = self._agent_player.get_total_score()
+                opponents = [p for p in game._players if p is not self._agent_player]
+                opponents_beaten = sum(1 for o in opponents if agent_score > o.get_total_score())
+                reward = opponents_beaten / (N_PLAYERS - 1)
+                self._obs_queue.put((None, None, None, reward, True))
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                try:
+                    self._obs_queue.put((None, None, None, 0.0, True))
+                except Exception:
+                    pass
+            finally:
+                self._done_event.set()
 
         self._thread = threading.Thread(target=run_game, daemon=True)
         self._thread.start()
