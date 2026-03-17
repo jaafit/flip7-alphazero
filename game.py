@@ -65,6 +65,15 @@ class Game:
         if not self._silent_mode:
             print(*args)
 
+    def _pause_until_enter(self) -> None:
+        """Halt until user presses Enter (no-op in silent mode). One blank line comes from the Enter key."""
+        if self._silent_mode:
+            return
+        self._readline()
+
+    def _is_human(self, player: BasePlayer) -> bool:
+        return isinstance(player, HumanPlayer)
+
     def _print(self, *args: object) -> None:
         if not self._silent_mode:
             print(*args, end="", flush=True)
@@ -157,6 +166,7 @@ class Game:
         self._show_all_hands()
 
     def _play_turns(self) -> None:
+        self._pause_until_enter()  # Pause before first player acts
         while self._has_active_players():
             n = len(self._players)
             for i in range(n):
@@ -167,12 +177,20 @@ class Game:
                 if not player.has_cards():
                     self._printf("🎯 %s has no number cards and must HIT\n", player.get_name())
                     self._player_hit(player)
+                    if not self._is_human(player):
+                        self._pause_until_enter()
+                    else:
+                        self._println()
                     continue
                 should_hit = self._get_player_choice(player)
                 if should_hit:
                     self._player_hit(player)
                 else:
                     self._player_stay(player)
+                if not self._is_human(player):
+                    self._pause_until_enter()
+                else:
+                    self._println()
                 if not self._has_active_players():
                     break
 
@@ -238,27 +256,48 @@ class Game:
             self._deck.discard_card(card)
             raise
         self._printf("   🎲 %s must flip 3 cards!\n", target.get_name())
+        set_aside: List[Card] = []
         for i in range(3):
             if not target.is_active():
                 break
             drawn = self._deck.draw_card()
             self._printf("      Card %d: %s\n", i + 1, str(drawn))
             if drawn.is_action_card():
-                try:
-                    self._handle_action_card(target, drawn)
-                except Exception as e:
-                    if "flip7" in str(e):
-                        self._printf("   🎉 %s achieved FLIP 7!\n", target.get_name())
-                        self._end_round_for_flip7(target)
-                        break
-                    self._deck.discard_card(drawn)
-                    raise
+                if drawn.action == ActionType.SECOND_CHANCE and not target.has_second_chance():
+                    try:
+                        self._handle_action_card(target, drawn)
+                    except Exception as e:
+                        if "flip7" in str(e):
+                            self._printf("   🎉 %s achieved FLIP 7!\n", target.get_name())
+                            self._end_round_for_flip7(target)
+                            break
+                        self._deck.discard_card(drawn)
+                        raise
+                else:
+                    set_aside.append(drawn)
             else:
                 err = target.add_card(drawn)
                 if err:
                     self._handle_card_add_error(target, drawn, err)
                     if "flip7" in err or "bust" in err:
                         break
+        resolved = 0
+        if target.is_active():
+            for ac in set_aside:
+                if not target.is_active():
+                    break
+                try:
+                    self._handle_action_card(target, ac)
+                    resolved += 1
+                except Exception as e:
+                    if "flip7" in str(e):
+                        self._printf("   🎉 %s achieved FLIP 7!\n", target.get_name())
+                        self._end_round_for_flip7(target)
+                        break
+                    self._deck.discard_card(ac)
+                    raise
+        for ac in set_aside[resolved:]:
+            self._deck.discard_card(ac)
         self._deck.discard_card(card)
 
     def _handle_second_chance_card(self, player: BasePlayer, card: Card) -> None:
